@@ -244,8 +244,45 @@ std::string gen_get_request(std::string& host, std::string& path)
     return request.str();
 }
 
-bool case_http()
+int get_code(const std::string& header)
 {
+    char http[10];
+    int code = 0;
+    std::sscanf(header.c_str(), "%s %d", http, &code);
+    return code;
+}
+
+bool case_http(int& sockfd, Url& url)
+{
+    std::string request = gen_get_request(url.host, url.path);
+
+    ssize_t bytes_sent = send(sockfd, request.c_str(), request.size(), 0);
+    if(bytes_sent < 0)
+    {
+        std::printf("error: send error\n");
+        return false;
+    }
+
+    char recv_buffer[1024];
+    std::string response;
+
+    ssize_t bytes_recieved;
+    while((bytes_recieved = recv(sockfd, recv_buffer, sizeof(recv_buffer) - 1, 0)) > 0)
+    {
+        recv_buffer[bytes_recieved] = '\0';
+        response += recv_buffer;
+    }
+    if(bytes_recieved < 0)
+    {
+        std::printf("error: recv error!\n");
+        return false;
+    }
+
+    size_t sep = response.find("\r\n\r\n");
+    std::string header = response.substr(0, sep);
+    std::string body = response.substr(sep + 4);
+
+    get_code(header);
     return true;
 }
 
@@ -304,12 +341,9 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    printf("scheme: %s\n", url.scheme.c_str());
     if(strncmp(url.scheme.c_str(), "http", 4) == 0)
     {
-        printf("Success!\n");
-        case_http();
-        std::cout << gen_get_request(url.host, url.path) << std::endl;
+        case_http(sockfd, url);
     }
     else if(strncmp(url.scheme.c_str(), "https", 5) == 0)
     {
