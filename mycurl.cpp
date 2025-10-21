@@ -23,6 +23,10 @@
 #include <fstream>
 #include <sstream>
 
+// Enable if you want debugging to be printed, see examble below.
+// Alternative, pass CFLAGS=-DDEBUG to make, make CFLAGS=-DDEBUG
+#define DEBUG
+
 namespace fs = std::filesystem;
 
 // Return current local time formatted as "yy-mm-dd hh:mm:ss"
@@ -166,6 +170,84 @@ finalize_defaults:
     return true;
 }
 
+bool try_connect(int *sockfd, const char *Desthost, const char *Destport)
+{
+  //variable that will be filled with data
+  struct addrinfo *res, *pInfo;
+
+  struct addrinfo hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+
+  int addrinfo_status = getaddrinfo(Desthost, Destport, &hints, &res);
+  if(addrinfo_status != 0)
+  {
+    printf("\nERROR: getaddrinfo Failed\n");
+    printf("Returned: %d\n", addrinfo_status);
+    return false;
+  }
+
+  #ifdef DEBUG
+  printf("getaddrinfo Succeded!\n");
+  #endif
+
+  for(pInfo = res; pInfo != NULL; pInfo = pInfo->ai_next)
+  {
+    *sockfd = socket(pInfo->ai_family, pInfo->ai_socktype, pInfo->ai_protocol);
+    if(*sockfd != -1)
+    {
+      break;
+    }
+  }
+
+  if(*sockfd == -1)
+  {
+    printf("\nERROR: Socket creation Failed\n");
+    printf("Returned: %d\n", *sockfd);
+    return false;
+  }
+
+  //Set options for socket
+  struct timeval tv;
+  tv.tv_sec = 10;
+  tv.tv_usec = 0;
+  setsockopt(*sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+  #ifdef DEBUG
+  printf("Socket creation Succeded!\n");
+  #endif
+
+  int connect_status = connect(*sockfd, pInfo->ai_addr, pInfo->ai_addrlen);
+  if(connect_status != 0)
+  {
+    printf("\nERROR: RESOLVE ISSUE\n");
+    printf("Returned: %d\n", connect_status);
+    return false;
+  }
+
+  #ifdef DEBUG
+  printf("Connection Succeded!\n");
+  #endif
+
+  freeaddrinfo(res);
+  return true;
+}
+
+std::string gen_get_request(std::string& host, std::string& path)
+{
+    std::ostringstream request;
+    request << "GET " << (path.empty() ? "/" : path) << " HTTP/1.1\r\n";
+    request << "Host: " << host << "\r\n";
+    request << "Connection: close\r\n";
+    request << "\r\n";
+    return request.str();
+}
+
+bool case_http()
+{
+    return true;
+}
 
 int main(int argc, char* argv[]) {
     bool cache_enabled = false;
@@ -214,6 +296,25 @@ int main(int argc, char* argv[]) {
     
     /* do stuff */
     int resp_body_size=0xFACCE;
+
+    int sockfd;
+    bool connection_status = try_connect(&sockfd, url.host.c_str(), url.port.c_str());
+    if(!connection_status)
+    {
+        return EXIT_FAILURE;
+    }
+
+    printf("scheme: %s\n", url.scheme.c_str());
+    if(strncmp(url.scheme.c_str(), "http", 4) == 0)
+    {
+        printf("Success!\n");
+        case_http();
+        std::cout << gen_get_request(url.host, url.path) << std::endl;
+    }
+    else if(strncmp(url.scheme.c_str(), "https", 5) == 0)
+    {
+        printf("https is here!\n");
+    }
     
 
     auto t2 = clock::now();
@@ -224,6 +325,6 @@ int main(int argc, char* argv[]) {
 
 
 
-    
+    close(sockfd);
     return EXIT_SUCCESS;
 }
