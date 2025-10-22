@@ -470,7 +470,7 @@ int main(int argc, char* argv[]) {
 
     int sockfd;
 
-    while(redirects < max_redirects)
+    while(redirects <= max_redirects)
     {
         //std::cout << "url: " << url.scheme << url.host << url.port << url.path << std::endl;
         bool connection_status = try_connect(&sockfd, url.host.c_str(), url.port.c_str());
@@ -502,7 +502,7 @@ int main(int argc, char* argv[]) {
         {
             break;
         }
-        redirects += 1;
+        redirects++;
         std::cout << "redirecting " << redirect_url.c_str() << std::endl;
 
         url.scheme.clear();
@@ -516,7 +516,7 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    if(redirects >= max_redirects)
+    if(redirects > max_redirects)
     {
         std::cout << "error too many redirects!" << std::endl;
         SSL_CTX_free(ctx);
