@@ -291,6 +291,7 @@ bool case_http(int& sockfd, Url& url, std::string& output_file, std::string& out
     if(bytes_sent < 0)
     {
         std::printf("error send error\n");
+        close(sockfd);
         return false;
     }
 
@@ -306,6 +307,7 @@ bool case_http(int& sockfd, Url& url, std::string& output_file, std::string& out
     if(bytes_recieved < 0)
     {
         std::printf("error recv error!\n");
+        close(sockfd);
         return false;
     }
 
@@ -316,8 +318,9 @@ bool case_http(int& sockfd, Url& url, std::string& output_file, std::string& out
     int code = get_code(header);
     if(code >= 300 && code < 400) //redirect
     {
-        std::cout << "New url: " << get_redirect_url(header) << "\n" << std::endl;
+        //std::cout << "New url: " << get_redirect_url(header) << "\n" << std::endl; //remove
         out = get_redirect_url(header);
+        close(sockfd);
         return false;
     }
 
@@ -330,22 +333,37 @@ bool case_http(int& sockfd, Url& url, std::string& output_file, std::string& out
     return true;
 }
 
-bool case_https(int& sockfd, Url& url, std::string& output_file, std::string& out)
+bool case_https(int& sockfd, SSL_CTX *ctx, Url& url, std::string& output_file, std::string& out)
 {
+    //SSL stuff here i think its called wrapping the socket in ssl:
+    SSL *ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, sockfd);
+
+    if(SSL_connect(ssl) <= 0)
+    {
+        ERR_print_errors_fp(stdout);
+        SSL_free(ssl);
+        close(sockfd);
+        return false;
+    }
+
     std::string request = gen_get_request(url.host, url.path);
 
-    ssize_t bytes_sent = send(sockfd, request.c_str(), request.size(), 0);
-    if(bytes_sent < 0)
+    int bytes_sent = SSL_write(ssl, request.c_str(), request.size());
+    if(bytes_sent <= 0)
     {
         std::printf("error send error\n");
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        close(sockfd);
         return false;
     }
 
     char recv_buffer[1024];
     std::string response;
 
-    ssize_t bytes_recieved;
-    while((bytes_recieved = recv(sockfd, recv_buffer, sizeof(recv_buffer) - 1, 0)) > 0)
+    int bytes_recieved;
+    while((bytes_recieved = SSL_read(ssl, recv_buffer, sizeof(recv_buffer) - 1)) > 0)
     {
         recv_buffer[bytes_recieved] = '\0';
         response += recv_buffer;
@@ -353,6 +371,9 @@ bool case_https(int& sockfd, Url& url, std::string& output_file, std::string& ou
     if(bytes_recieved < 0)
     {
         std::printf("error recv error!\n");
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        close(sockfd);
         return false;
     }
 
@@ -360,11 +381,16 @@ bool case_https(int& sockfd, Url& url, std::string& output_file, std::string& ou
     std::string header = response.substr(0, sep);
     std::string body = response.substr(sep + 4);
 
+    std::cout << "body real size = " << body.size() << std::endl;
+
     int code = get_code(header);
     if(code >= 300 && code < 400) //redirect
     {
-        std::cout << "New url: " << get_redirect_url(header) << "\n" << std::endl;
+        //std::cout << "New url: " << get_redirect_url(header) << "\n" << std::endl; //remove
         out = get_redirect_url(header);
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        close(sockfd);
         return false;
     }
 
@@ -420,6 +446,17 @@ int main(int argc, char* argv[]) {
     int redirects = 0;
     using clock = std::chrono::steady_clock;
 
+    //initial ssl handling
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if(!ctx)
+    {
+        ERR_print_errors_fp(stdout);
+        return EXIT_FAILURE;
+    }
+
     auto t1 = clock::now();
     
     /* do stuff */
@@ -427,13 +464,9 @@ int main(int argc, char* argv[]) {
 
     int sockfd;
 
-    if(!output_file.empty())
-    {
-        std::cout << "Do save a file, filename: " << output_file.c_str() << std::endl;
-    }
-
     while(redirects < max_redirects)
     {
+        //std::cout << "url: " << url.scheme << url.host << url.port << url.path << std::endl;
         bool connection_status = try_connect(&sockfd, url.host.c_str(), url.port.c_str());
         if(!connection_status)
         {
@@ -442,18 +475,19 @@ int main(int argc, char* argv[]) {
 
         bool case_status;
         std::string redirect_url = "";
-        if(strncmp(url.scheme.c_str(), "http", 4) == 0)
+        if(strncmp(url.scheme.c_str(), "https", 5) == 0)
+        {
+            case_status = case_https(sockfd, ctx, url, output_file, redirect_url);
+        }
+        else if(strncmp(url.scheme.c_str(), "http", 4) == 0)
         {
             case_status = case_http(sockfd, url, output_file, redirect_url);
-        }
-        else if(strncmp(url.scheme.c_str(), "https", 5) == 0)
-        {
-            printf("https is here!\n");
         }
         else
         {
             std::printf("error wrong scheme!\n");
             close(sockfd);
+            SSL_CTX_free(ctx);
             return EXIT_FAILURE;
         }
 
@@ -462,19 +496,24 @@ int main(int argc, char* argv[]) {
         {
             break;
         }
-        redirects += 10;
+        redirects += 1;
         std::cout << "redirecting " << redirect_url.c_str() << std::endl;
+
+        url.scheme.clear();
+        url.host.clear();
+        url.port.clear();
+        url.path.clear();
 
         if (!parse_url(redirect_url, url, error)) {
             std::fprintf(stdout, "ERROR URL parse error: %s\n", error.c_str());
-            close(sockfd);
             return EXIT_FAILURE;
         }
     }
     
-    if(redirects >= 10)
+    if(redirects >= max_redirects)
     {
         std::cout << "error too many redirects!" << std::endl;
+        SSL_CTX_free(ctx);
         return EXIT_FAILURE;
     }
 
@@ -487,5 +526,6 @@ int main(int argc, char* argv[]) {
 
 
     close(sockfd);
+    SSL_CTX_free(ctx);
     return EXIT_SUCCESS;
 }
