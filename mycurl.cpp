@@ -252,14 +252,32 @@ int get_code(const std::string& header)
     return code;
 }
 
-bool case_http(int& sockfd, Url& url)
+std::string get_redirect_url(const std::string& header)
+{
+    size_t pos = header.find("Location:");
+    if(pos == std::string::npos)
+    {
+        return "";
+    }
+
+    pos += 10; //Move past Location: and a space
+    size_t end = header.find("\r\n", pos);
+    if(end == std::string::npos)
+    {
+        end = header.size();
+    }
+    
+    return header.substr(pos, end - pos);
+}
+
+bool case_http(int& sockfd, Url& url, std::string& out)
 {
     std::string request = gen_get_request(url.host, url.path);
 
     ssize_t bytes_sent = send(sockfd, request.c_str(), request.size(), 0);
     if(bytes_sent < 0)
     {
-        std::printf("error: send error\n");
+        std::printf("error send error\n");
         return false;
     }
 
@@ -274,7 +292,7 @@ bool case_http(int& sockfd, Url& url)
     }
     if(bytes_recieved < 0)
     {
-        std::printf("error: recv error!\n");
+        std::printf("error recv error!\n");
         return false;
     }
 
@@ -283,6 +301,8 @@ bool case_http(int& sockfd, Url& url)
     std::string body = response.substr(sep + 4);
 
     get_code(header);
+    std::cout << "New url: " << get_redirect_url(header) << "\n" << std::endl;
+    out = get_redirect_url(header);
     return true;
 }
 
@@ -335,21 +355,46 @@ int main(int argc, char* argv[]) {
     int resp_body_size=0xFACCE;
 
     int sockfd;
-    bool connection_status = try_connect(&sockfd, url.host.c_str(), url.port.c_str());
-    if(!connection_status)
-    {
-        return EXIT_FAILURE;
-    }
 
-    if(strncmp(url.scheme.c_str(), "http", 4) == 0)
+    while(redirects < max_redirects)
     {
-        case_http(sockfd, url);
-    }
-    else if(strncmp(url.scheme.c_str(), "https", 5) == 0)
-    {
-        printf("https is here!\n");
+        bool connection_status = try_connect(&sockfd, url.host.c_str(), url.port.c_str());
+        if(!connection_status)
+        {
+            return EXIT_FAILURE;
+        }
+
+        bool case_status;
+        std::string redirect_url = "";
+        if(strncmp(url.scheme.c_str(), "http", 4) == 0)
+        {
+            case_status = case_http(sockfd, url, redirect_url);
+            printf("The string: %s\n", redirect_url.c_str());
+        }
+        else if(strncmp(url.scheme.c_str(), "https", 5) == 0)
+        {
+            printf("https is here!\n");
+        }
+
+        //check if im done
+        if(case_status)
+        {
+            break;
+        }
+        redirects += 10;
+
+        if (!parse_url(redirect_url, url, error)) {
+            std::fprintf(stdout, "ERROR URL parse error: %s\n", error.c_str());
+            close(sockfd);
+            return EXIT_FAILURE;
+        }
     }
     
+    if(redirects >= 10)
+    {
+        std::cout << "error too many redirects!" << std::endl;
+        return EXIT_FAILURE;
+    }
 
     auto t2 = clock::now();
     std::chrono::duration<double> diff = t2 - t1; // seconds
