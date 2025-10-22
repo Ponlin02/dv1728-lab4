@@ -25,7 +25,7 @@
 
 // Enable if you want debugging to be printed, see examble below.
 // Alternative, pass CFLAGS=-DDEBUG to make, make CFLAGS=-DDEBUG
-#define DEBUG
+//#define DEBUG
 
 namespace fs = std::filesystem;
 
@@ -270,7 +270,20 @@ std::string get_redirect_url(const std::string& header)
     return header.substr(pos, end - pos);
 }
 
-bool case_http(int& sockfd, Url& url, std::string& out)
+void save_to_file(const std::string filename, const std::string& body)
+{
+    std::ofstream outfile(filename);
+    if(!outfile)
+    {
+        std::cout << "error could not open file!" << std::endl;
+        return;
+    }
+
+    outfile.write(body.c_str(), body.size());
+    outfile.close();
+}
+
+bool case_http(int& sockfd, Url& url, std::string& output_file, std::string& out)
 {
     std::string request = gen_get_request(url.host, url.path);
 
@@ -300,9 +313,67 @@ bool case_http(int& sockfd, Url& url, std::string& out)
     std::string header = response.substr(0, sep);
     std::string body = response.substr(sep + 4);
 
-    get_code(header);
-    std::cout << "New url: " << get_redirect_url(header) << "\n" << std::endl;
-    out = get_redirect_url(header);
+    int code = get_code(header);
+    if(code >= 300 && code < 400) //redirect
+    {
+        std::cout << "New url: " << get_redirect_url(header) << "\n" << std::endl;
+        out = get_redirect_url(header);
+        return false;
+    }
+
+    //write to file, but only when -o was given correctly
+    if(!output_file.empty())
+    {
+        save_to_file(output_file, body);
+    }
+
+    return true;
+}
+
+bool case_https(int& sockfd, Url& url, std::string& output_file, std::string& out)
+{
+    std::string request = gen_get_request(url.host, url.path);
+
+    ssize_t bytes_sent = send(sockfd, request.c_str(), request.size(), 0);
+    if(bytes_sent < 0)
+    {
+        std::printf("error send error\n");
+        return false;
+    }
+
+    char recv_buffer[1024];
+    std::string response;
+
+    ssize_t bytes_recieved;
+    while((bytes_recieved = recv(sockfd, recv_buffer, sizeof(recv_buffer) - 1, 0)) > 0)
+    {
+        recv_buffer[bytes_recieved] = '\0';
+        response += recv_buffer;
+    }
+    if(bytes_recieved < 0)
+    {
+        std::printf("error recv error!\n");
+        return false;
+    }
+
+    size_t sep = response.find("\r\n\r\n");
+    std::string header = response.substr(0, sep);
+    std::string body = response.substr(sep + 4);
+
+    int code = get_code(header);
+    if(code >= 300 && code < 400) //redirect
+    {
+        std::cout << "New url: " << get_redirect_url(header) << "\n" << std::endl;
+        out = get_redirect_url(header);
+        return false;
+    }
+
+    //write to file, but only when -o was given correctly
+    if(!output_file.empty())
+    {
+        save_to_file(output_file, body);
+    }
+
     return true;
 }
 
@@ -356,6 +427,11 @@ int main(int argc, char* argv[]) {
 
     int sockfd;
 
+    if(!output_file.empty())
+    {
+        std::cout << "Do save a file, filename: " << output_file.c_str() << std::endl;
+    }
+
     while(redirects < max_redirects)
     {
         bool connection_status = try_connect(&sockfd, url.host.c_str(), url.port.c_str());
@@ -368,12 +444,17 @@ int main(int argc, char* argv[]) {
         std::string redirect_url = "";
         if(strncmp(url.scheme.c_str(), "http", 4) == 0)
         {
-            case_status = case_http(sockfd, url, redirect_url);
-            printf("The string: %s\n", redirect_url.c_str());
+            case_status = case_http(sockfd, url, output_file, redirect_url);
         }
         else if(strncmp(url.scheme.c_str(), "https", 5) == 0)
         {
             printf("https is here!\n");
+        }
+        else
+        {
+            std::printf("error wrong scheme!\n");
+            close(sockfd);
+            return EXIT_FAILURE;
         }
 
         //check if im done
@@ -382,6 +463,7 @@ int main(int argc, char* argv[]) {
             break;
         }
         redirects += 10;
+        std::cout << "redirecting " << redirect_url.c_str() << std::endl;
 
         if (!parse_url(redirect_url, url, error)) {
             std::fprintf(stdout, "ERROR URL parse error: %s\n", error.c_str());
