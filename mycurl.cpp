@@ -283,7 +283,7 @@ void save_to_file(const std::string filename, const std::string& body)
     outfile.close();
 }
 
-bool case_http(int& sockfd, Url& url, std::string& output_file, std::string& out)
+bool case_http(int& sockfd, Url& url, std::string& output_file, int& body_size, std::string& out)
 {
     std::string request = gen_get_request(url.host, url.path);
 
@@ -295,14 +295,16 @@ bool case_http(int& sockfd, Url& url, std::string& output_file, std::string& out
         return false;
     }
 
-    char recv_buffer[1024];
+    char recv_buffer[8192];
     std::string response;
+    response.reserve(100000);
 
     ssize_t bytes_recieved;
     while((bytes_recieved = recv(sockfd, recv_buffer, sizeof(recv_buffer) - 1, 0)) > 0)
     {
-        recv_buffer[bytes_recieved] = '\0';
-        response += recv_buffer;
+        //recv_buffer[bytes_recieved] = '\0';
+        //response += recv_buffer;
+        response.append(recv_buffer, bytes_recieved);
     }
     if(bytes_recieved < 0)
     {
@@ -328,12 +330,13 @@ bool case_http(int& sockfd, Url& url, std::string& output_file, std::string& out
     if(!output_file.empty())
     {
         save_to_file(output_file, body);
+        body_size = body.size();
     }
 
     return true;
 }
 
-bool case_https(int& sockfd, SSL_CTX *ctx, Url& url, std::string& output_file, std::string& out)
+bool case_https(int& sockfd, SSL_CTX *ctx, Url& url, std::string& output_file, int& body_size, std::string& out)
 {
     //SSL stuff here i think its called wrapping the socket in ssl:
     SSL *ssl = SSL_new(ctx);
@@ -359,14 +362,16 @@ bool case_https(int& sockfd, SSL_CTX *ctx, Url& url, std::string& output_file, s
         return false;
     }
 
-    char recv_buffer[1024];
+    char recv_buffer[8192];
     std::string response;
+    response.reserve(100000);
 
     int bytes_recieved;
     while((bytes_recieved = SSL_read(ssl, recv_buffer, sizeof(recv_buffer) - 1)) > 0)
     {
-        recv_buffer[bytes_recieved] = '\0';
-        response += recv_buffer;
+        //recv_buffer[bytes_recieved] = '\0';
+        //response += recv_buffer;
+        response.append(recv_buffer, bytes_recieved);
     }
     if(bytes_recieved < 0)
     {
@@ -381,7 +386,7 @@ bool case_https(int& sockfd, SSL_CTX *ctx, Url& url, std::string& output_file, s
     std::string header = response.substr(0, sep);
     std::string body = response.substr(sep + 4);
 
-    std::cout << "body real size = " << body.size() << std::endl;
+    //std::cout << "body real size = " << body.size() << std::endl;
 
     int code = get_code(header);
     if(code >= 300 && code < 400) //redirect
@@ -398,6 +403,7 @@ bool case_https(int& sockfd, SSL_CTX *ctx, Url& url, std::string& output_file, s
     if(!output_file.empty())
     {
         save_to_file(output_file, body);
+        body_size = body.size();
     }
 
     return true;
@@ -477,11 +483,11 @@ int main(int argc, char* argv[]) {
         std::string redirect_url = "";
         if(strncmp(url.scheme.c_str(), "https", 5) == 0)
         {
-            case_status = case_https(sockfd, ctx, url, output_file, redirect_url);
+            case_status = case_https(sockfd, ctx, url, output_file, resp_body_size, redirect_url);
         }
         else if(strncmp(url.scheme.c_str(), "http", 4) == 0)
         {
-            case_status = case_http(sockfd, url, output_file, redirect_url);
+            case_status = case_http(sockfd, url, output_file, resp_body_size, redirect_url);
         }
         else
         {
